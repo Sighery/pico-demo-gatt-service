@@ -20,49 +20,51 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 # note: this must happen before project()
 include(pico_sdk_import.cmake)
 
-# Define our app name
-set(app pico_demo_gatt_service)
+# Define our application name
+set(APP pico_demo_gatt_service)
 
-# Use the variant you want - we ommited FreeRTOS
-# Either poll or background variant
-set(poll 0)
+# Use the variant you want - we omitted FreeRTOS
+# Poll variant runs btstack callbacks from the main thread
+# Background variant runs btstack callbacks from IRQs
+set(POLL 0)
 
-project(pico_demo_gatt_service)
+project(${APP})
 
 pico_sdk_init()
 
-add_executable(pico_demo_gatt_service pico_demo_gatt_service.c bt_init.c)
+add_executable(${APP} ${APP}.c led.c)
 
-if (${poll})
-    target_sources(pico_demo_gatt_service PRIVATE main_poll.c)
-    target_link_libraries(pico_demo_gatt_service pico_cyw43_arch_poll)
+# Link CYW43 driver for selected async context: main thread or interrupts
+if (${POLL})
+    target_link_libraries(${APP} pico_cyw43_arch_poll)
 else()
-    target_sources(pico_demo_gatt_service PRIVATE main_background.c)
-    target_link_libraries(pico_demo_gatt_service pico_cyw43_arch_threadsafe_background)
+    target_link_libraries(${APP} pico_cyw43_arch_threadsafe_background)
 endif()
 
-#
-target_include_directories(pico_demo_gatt_service PUBLIC ${CMAKE_CURRENT_LIST_DIR}/config)
-set(BTSTACK_ROOT ${PICO_SDK_PATH}/lib/btstack)
-#target_include_directories(pico_demo_gatt_service INTERFACE  ${BTSTACK_ROOT}/src)
+# Provide btstack configuration
+target_include_directories(${APP} PUBLIC ${CMAKE_CURRENT_LIST_DIR}/config)
 
 # Disable LWIP
-target_compile_definitions(pico_demo_gatt_service PUBLIC CYW43_LWIP=0)
+target_compile_definitions(${APP} PUBLIC CYW43_LWIP=0)
+
 # Generate GATT header
-pico_btstack_make_gatt_header(pico_demo_gatt_service PUBLIC ${CMAKE_CURRENT_LIST_DIR}/pico_demo_gatt_service.gatt)
+pico_btstack_make_gatt_header(${APP} PUBLIC ${CMAKE_CURRENT_LIST_DIR}/${APP}.gatt)
 
-# pull in common dependencies
-target_link_libraries(pico_demo_gatt_service pico_stdlib)
-target_link_libraries(pico_demo_gatt_service pico_btstack_cyw43)
-target_link_libraries(pico_demo_gatt_service pico_btstack_ble)
-target_link_libraries(pico_demo_gatt_service pico_btstack_classic)
+# Link Pico stdlib
+target_link_libraries(${APP} pico_stdlib)
 
-# enable usb output, disable uart output
-pico_enable_stdio_usb(pico_demo_gatt_service 0)
-pico_enable_stdio_uart(pico_demo_gatt_service 1)
+# Link BT stack
+target_link_libraries(${APP} pico_btstack_cyw43)
+# You may not need both BLE and Classic depending of your application
+target_link_libraries(${APP} pico_btstack_ble)
+target_link_libraries(${APP} pico_btstack_classic)
 
-# create map/bin/hex/uf2 file etc.
-pico_add_extra_outputs(pico_demo_gatt_service)
+# Decide if you want stdio over USB or UART
+pico_enable_stdio_usb(${APP} 0)
+pico_enable_stdio_uart(${APP} 1)
 
-# Why not?
+# Create map/bin/hex/uf2 file etc.
+pico_add_extra_outputs(${APP})
+
+# Do we really need this?
 suppress_btstack_warnings()

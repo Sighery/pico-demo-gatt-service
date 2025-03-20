@@ -47,14 +47,24 @@
  */
  // *****************************************************************************
 
+ // System headers
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "pico_demo_gatt_service.h"
+// Pico headers
+#include "pico/stdlib.h"
+#include "pico/cyw43_arch.h"
+
+// BT stack headers
 #include "btstack.h"
+#include "btstack_run_loop.h"
 #include "ble/gatt-service/battery_service_server.h"
+
+// App headers
+#include "pico_demo_gatt_service.h"
+#include "led.h"
 
 #define HEARTBEAT_PERIOD_MS 1000
 
@@ -104,7 +114,8 @@ const uint8_t adv_data[] = {
 };
 const uint8_t adv_data_len = sizeof(adv_data);
 
-static void le_counter_setup(void){
+// Setup our GATT service
+static void setup_gatt_service(void){
 
     l2cap_init();
 
@@ -209,7 +220,18 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
 
     if (packet_type != HCI_EVENT_PACKET) return;
 
-    switch (hci_event_packet_get_type(packet)) {
+    switch (hci_event_packet_get_type(packet))
+    {
+        case BTSTACK_EVENT_STATE:
+        {
+            bd_addr_t local_addr;
+            if (btstack_event_state_get_state(packet) != HCI_STATE_WORKING) return;
+            gap_local_bd_addr(local_addr);
+            printf("BTstack up and running on %s.\n", bd_addr_to_str(local_addr));
+            led_off();
+        }
+        break;
+
         case HCI_EVENT_DISCONNECTION_COMPLETE:
             le_notification_enabled = 0;
             break;
@@ -276,16 +298,31 @@ static int att_write_callback(hci_con_handle_t connection_handle, uint16_t att_h
     }
     return 0;
 }
-/* LISTING_END */
 
-int btstack_main(void);
-int btstack_main(void)
+/**
+ * Entry point
+ */
+int main()
 {
-    le_counter_setup();
+    // Setup IO first
+    stdio_init_all();
 
-    // turn on!
+    // Initialize CYW43 driver architecture (will enable BT if/because CYW43_ENABLE_BLUETOOTH == 1)
+    if (cyw43_arch_init())
+    {
+        printf("failed to initialise cyw43_arch\n");
+        return -1;
+    }
+
+    // Turn on LED while HCI is powering up
+    led_on();
+
+    // Setup our GATT service
+    setup_gatt_service();
+
+    // Turn on Bluetooth HCI
 	hci_power_control(HCI_POWER_ON);
 
-    return 0;
+    // Run our Bluetooth app
+    btstack_run_loop_execute();
 }
-/* EXAMPLE_END */
