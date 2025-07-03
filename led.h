@@ -6,3 +6,4 @@
 
 void led_on();
 void led_off();
+bool led_status();

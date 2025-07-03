@@ -14,11 +14,12 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif()
 # ====================================================================================
-set(PICO_BOARD pico_w CACHE STRING "Board type")
+set(PICO_BOARD pico2_w CACHE STRING "Board type")
+set(ENABLE_CLASSIC 0)
 
 # initialize the SDK based on PICO_SDK_PATH
 # note: this must happen before project()
-include(pico_sdk_import.cmake)
+include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
 # Define our application name
 set(APP pico_demo_gatt_service)
@@ -60,8 +61,8 @@ target_link_libraries(${APP} pico_btstack_ble)
 target_link_libraries(${APP} pico_btstack_classic)
 
 # Decide if you want stdio over USB or UART
-pico_enable_stdio_usb(${APP} 0)
-pico_enable_stdio_uart(${APP} 1)
+pico_enable_stdio_usb(${APP} 1)
+pico_enable_stdio_uart(${APP} 0)
 
 # Create map/bin/hex/uf2 file etc.
 pico_add_extra_outputs(${APP})

@@ -61,6 +61,9 @@
 #include "btstack.h"
 #include "btstack_run_loop.h"
 #include "ble/gatt-service/battery_service_server.h"
+#ifdef WANT_HCI_DUMP
+#include "platform/embedded/hci_dump_embedded_stdout.h"
+#endif
 
 // App headers
 #include "pico_demo_gatt_service.h"
@@ -81,7 +84,7 @@
  */
 
 /* LISTING_START(MainConfiguration): Init L2CAP SM ATT Server and start heartbeat timer */
-static int  le_notification_enabled;
+static int le_notification_enabled;
 static btstack_timer_source_t heartbeat;
 static btstack_packet_callback_registration_t hci_event_callback_registration;
 static hci_con_handle_t con_handle;
@@ -108,7 +111,7 @@ const uint8_t adv_data[] = {
     // Flags general discoverable
     0x02, BLUETOOTH_DATA_TYPE_FLAGS, APP_AD_FLAGS,
     // Name
-    0x0b, BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME, 'L', 'E', ' ', 'C', 'o', 'u', 'n', 't', 'e', 'r',
+    0x0b, BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME, 'P', 'i', 'c', 'o', ' ', 'B', 'L', 'E',
     // Incomplete List of 16-bit Service Class UUIDs -- FF10 - only valid for testing!
     0x03, BLUETOOTH_DATA_TYPE_INCOMPLETE_LIST_OF_16_BIT_SERVICE_CLASS_UUIDS, 0x10, 0xff,
 };
@@ -180,11 +183,20 @@ static void setup_gatt_service(void){
 static int  counter = 0;
 static char counter_string[30];
 static int  counter_string_len;
+static char led_string[10];
+static int led_string_len;
+
+static void refresh_led_status() {
+    led_string_len = snprintf(led_string, sizeof(led_string), (led_status()) ? "ON" : "OFF");
+    puts(led_string);
+}
 
 static void beat(void){
     counter++;
     counter_string_len = snprintf(counter_string, sizeof(counter_string), "BTstack counter %04u", counter);
     puts(counter_string);
+
+    refresh_led_status();
 }
 
 static void heartbeat_handler(struct btstack_timer_source *ts){
@@ -218,10 +230,13 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
     UNUSED(channel);
     UNUSED(size);
 
+    printf("packet_handler - packet_type %d\n", packet_type);
+
     if (packet_type != HCI_EVENT_PACKET) return;
 
-    switch (hci_event_packet_get_type(packet))
-    {
+    printf("packet_handler - event_packet_type %d\n", hci_event_packet_get_type(packet));
+
+    switch (hci_event_packet_get_type(packet)) {
         case BTSTACK_EVENT_STATE:
         {
             bd_addr_t local_addr;
@@ -234,9 +249,11 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
 
         case HCI_EVENT_DISCONNECTION_COMPLETE:
             le_notification_enabled = 0;
+            printf("HCI_EVENT_DISCONNECTION_COMPLETE\n");
             break;
         case ATT_EVENT_CAN_SEND_NOW:
             att_server_notify(con_handle, ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE, (uint8_t*) counter_string, counter_string_len);
+            att_server_notify(con_handle, ATT_CHARACTERISTIC_0000FF12_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE, (uint8_t*) led_string, led_string_len);
             break;
         default:
             break;
@@ -263,9 +280,25 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
 static uint16_t att_read_callback(hci_con_handle_t connection_handle, uint16_t att_handle, uint16_t offset, uint8_t * buffer, uint16_t buffer_size){
     UNUSED(connection_handle);
 
+    printf("att_handle %#06x\n", att_handle);
+
+    // Counter characteristic
     if (att_handle == ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE){
         return att_read_callback_handle_blob((const uint8_t *)counter_string, counter_string_len, offset, buffer, buffer_size);
     }
+    if (att_handle == ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_USER_DESCRIPTION_HANDLE) {
+        return att_read_callback_handle_blob((const uint8_t *)"Counter", 7, offset, buffer, buffer_size);
+    }
+
+    // LED characteristic
+    if (att_handle == ATT_CHARACTERISTIC_0000FF12_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE) {
+        refresh_led_status();
+        return att_read_callback_handle_blob((const uint8_t *)led_string, led_string_len, offset, buffer, buffer_size);
+    }
+    if (att_handle == ATT_CHARACTERISTIC_0000FF12_0000_1000_8000_00805F9B34FB_01_USER_DESCRIPTION_HANDLE) {
+        return att_read_callback_handle_blob((const uint8_t *)"LED Status and Control", 22, offset, buffer, buffer_size);
+    }
+
     return 0;
 }
 /* LISTING_END */
@@ -292,6 +325,22 @@ static int att_write_callback(hci_con_handle_t connection_handle, uint16_t att_h
         case ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE:
             printf("Write: transaction mode %u, offset %u, data (%u bytes): ", transaction_mode, offset, buffer_size);
             printf_hexdump(buffer, buffer_size);
+            break;
+        case ATT_CHARACTERISTIC_0000FF12_0000_1000_8000_00805F9B34FB_01_CLIENT_CONFIGURATION_HANDLE:
+            le_notification_enabled = little_endian_read_16(buffer, 0) == GATT_CLIENT_CHARACTERISTICS_CONFIGURATION_NOTIFICATION;
+            con_handle = connection_handle;
+            break;
+        case ATT_CHARACTERISTIC_0000FF12_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE:
+            printf("Value 2 write");
+            printf("Write: transaction mode %u, offset %u, data (%u bytes): ", transaction_mode, offset, buffer_size);
+            printf_hexdump(buffer, buffer_size);
+
+            buffer[buffer_size] = 0;
+            if (!strcmp(buffer, "OFF")) {
+                led_off();
+            } else if (!strcmp(buffer, "ON")) {
+                led_on();
+            }
             break;
         default:
             break;
@@ -321,7 +370,11 @@ int main()
     setup_gatt_service();
 
     // Turn on Bluetooth HCI
-	hci_power_control(HCI_POWER_ON);
+    hci_power_control(HCI_POWER_ON);
+
+#if WANT_HCI_DUMP
+    hci_dump_init(hci_dump_embedded_stdout_get_instance());
+#endif
 
     // Run our Bluetooth app
     btstack_run_loop_execute();
